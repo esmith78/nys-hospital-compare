@@ -1,2 +1,3 @@
 # nys-hospital-compare
 Produces a Shiny dashboard which enables users to compare performance among hospitals in New York State on the basis of volume and cost for major medical conditions and surgical procedures.
+Users may select the county, condition or procedure, and severity of illness to display the median volume and cost among all hospitals meeting the selected criteria.  They may then select the name of a particular facility to view its specific volume and median cost.  A two-way, color-coded table displays the names of each hospital, grouping them into pairs based on volume and cost which allows the user to quickly and easily identify high-volume/ low cost (better performing) hospitals.
