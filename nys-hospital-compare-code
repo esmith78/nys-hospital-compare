@@ -1,0 +1,209 @@
+---
+title: "New York State Hospital Performance Comparison Tool"
+author: " "
+output: 
+  flexdashboard::flex_dashboard:
+    orientation: rows
+    social: menu
+    source_code: embed
+runtime: shiny
+---
+
+```{r global, include=FALSE}
+# load data in 'global' chunk so it can be shared by all users of the dashboard
+library(RSocrata)
+library(stringr)
+library(data.table)
+library(dplyr)
+library(tidyr)
+library(DT)
+library(shiny)
+
+# Acquire data
+dataLink <- "https://health.data.ny.gov/Health/Hospital-Inpatient-Cost-Transparency-Beginning-200/7dtz-qxmr"
+data <- read.socrata(dataLink) %>%
+        select(pfi,year,apr_drg_description,apr_severity_of_illness_description,discharges,median_cost,facility_name)
+
+
+facLink <- "https://health.data.ny.gov/Health/Health-Facility-General-Information/vn5v-hh5r"
+facData <- read.socrata(facLink) %>%
+           select(fac_id,county) %>%
+           distinct()
+
+# Limit to most current year of data
+maxYr <- as.numeric(max(data$year))
+
+currData <- data %>%
+             filter(year == maxYr) %>%
+             mutate(apr_drg_description = str_to_title(apr_drg_description, locale = 'en')) %>%
+             left_join(facData, by = c("pfi" = "fac_id"))
+
+thresholds <- as.data.frame(currData) %>%
+              group_by(county,apr_drg_description,apr_severity_of_illness_description) %>%
+              summarize(cty_median_discharges = round(median(discharges,0)),
+                        cty_median_cost = round(median(median_cost),0))
+
+currData2 <- as.data.frame(currData) %>%
+             left_join(thresholds, by = c("county","apr_drg_description","apr_severity_of_illness_description")) %>%
+             mutate(volume_group = ifelse(discharges <= cty_median_discharges, 'Low Volume Group','High Volume Group')) %>%
+             mutate(cost_group = ifelse(median_cost <= cty_median_cost, 'low_cost','high_cost'))
+
+currDataTable <- as.data.frame(currData2) %>%
+                 pivot_wider(names_from = cost_group,
+                             values_from = facility_name) %>%
+                 group_by(county,apr_drg_description,apr_severity_of_illness_description,
+                          volume_group) %>%
+                 summarize(low_cost_group = toString(unique(sort(low_cost))),
+                           high_cost_group = toString(unique(sort(high_cost)))) %>%
+                 mutate(low_cost_group = str_replace_all(low_cost_group,"NA, ","")) %>%
+                 mutate(high_cost_group = str_replace_all(high_cost_group,"NA, ",""))
+
+names(currDataTable) <- c("County","Condition or Procedure","Severity of Illness",
+                          " ","Low Cost Group","High Cost Group")
+
+
+thresholds$cty_median_cost <- paste0('$',thresholds$cty_median_cost)
+names(thresholds) <- c("County","Condition or Procedure","Severity of Illness","Countywide Median Volume","Countywide Median Cost")
+
+currData <- currData %>%
+            select(county,facility_name,apr_drg_description,apr_severity_of_illness_description,discharges,median_cost) %>%
+            mutate(median_cost = round(median_cost,0)) %>%
+            mutate(median_cost = paste0('$',median_cost))
+
+names(currData) <- c("County","Facility Name","Condition or Procedure","Severity of Illness","Volume","Median Cost")
+
+# Cleanup
+rm(currData2,data,facData,dataLink,facLink,maxYr)
+
+gc()
+```
+
+Inputs {.sidebar}
+-----------------------------------------------------------------------
+
+```{r}
+
+counties <- unique(sort(currDataTable$County))
+
+conds <- unique(sort(currDataTable$`Condition or Procedure`))
+
+#sev <- unique(sort(currDataTable$`Severity of Illness`))#
+sev <- list("Minor" = "Minor", "Moderate" = "Moderate", "Major" = "Major", "Extreme" = "Extreme", "Not Applicable" = "Not Applicable")
+
+selectInput("county", label = h3("County"), 
+    choices = counties)
+
+selectInput("cond", label = h3("Condition or Procedure"), 
+    choices = conds)
+ 
+selectInput("severity", label = h3("Severity of Illness"), 
+    choices = sev)
+
+selectedData <- reactive({
+  currDataTable %>%
+    filter(County == input$county) %>%
+    filter(`Condition or Procedure` == input$cond) %>%
+    filter(`Severity of Illness` == input$severity) 
+})
+
+selectedData2 <- reactive({
+    thresholds %>%
+      filter(County == input$county) %>%
+      filter(`Condition or Procedure` == input$cond) %>%
+      filter(`Severity of Illness` == input$severity)
+  })
+
+
+
+facs <- unique(sort(currData$`Facility Name`))
+
+selectInput("facility", label = h3("Hospital Name"),
+    choices = facs)
+
+selectedData3 <- reactive({
+  currData %>%
+    filter(County == input$county) %>%
+    filter(`Condition or Procedure` == input$cond) %>%
+    filter(`Severity of Illness` == input$severity) %>%
+    filter(`Facility Name` == input$facility) 
+})
+ 
+```
+
+__About the Data:__
+
+All data is from calendar year 2017.
+
+It is sourced from New York State Open Health Data, Hospital Inpatient Cost Transparency: Beginning 2009
+     https://health.data.ny.gov/Health/Hospital-Inpatient-Cost-Transparency-Beginning-200/7dtz-qxmr
+
+Row {data-height = 20}
+-----------------------------------------------------------------------
+
+### About this Tool
+
+Compare performance among hospitals in New York State on the basis of volume and cost for major medical conditions and surgical procedures.  Start by selecting a __county__ of interest. Next, select a __Condition or Procedure__ and __Severity of Illness__.
+
+The top panel on the right will display the median volume and cost among all hospitals and any selected hospital.  The bottom panel on the right will display each hospital in one of four quadrants based on their performance relative to the countywide median volume and cost.
+
+Hospitals with high volume and low cost may be considered high-performing facilities; those with high volume and high cost may be considered low-performing.
+
+Row {data-height = 10}
+-----------------------------------------------------------------------
+
+### Countywide Thresholds for Selected Condition or Procedure
+
+```{r}
+  
+  renderDT({
+    datatable(as.data.frame(selectedData2()) %>% select(`Countywide Median Volume`,`Countywide Median Cost`), 
+              options = list(dom = 't',
+                             columnDefs = list(list(className = 'dt-center', targets = '_all'))), 
+              rownames = FALSE) %>%
+  formatStyle('Countywide Median Volume', `text-align` = 'center') %>%
+  formatStyle('Countywide Median Cost', `text-align` = 'center')
+              
+  })
+
+```
+
+### Performance for Selected Hospital
+    
+```{r}
+
+renderDT({
+    datatable(as.data.frame(selectedData3()) %>% select(`Facility Name`,`Volume`,`Median Cost`), 
+              options = list(dom = 't',
+                             columnDefs = list(list(className = 'dt-center', targets = '_all'))), 
+              rownames = FALSE) %>%
+  formatStyle('Volume', `text-align` = 'center') %>%
+  formatStyle('Median Cost', `text-align` = 'center')
+              
+  })
+
+```
+
+Row 
+-----------------------------------------------------------------------
+
+### Performance for Selected Condition or Procedure
+    
+```{r}
+
+renderDT({
+  datatable(as.data.frame(selectedData()) %>% select(` `,`Low Cost Group`,`High Cost Group`), 
+            options = list(dom = 't',
+                           searchHighlight = TRUE), 
+            rownames = FALSE) %>%
+    formatStyle(
+              'Low Cost Group', ' ',
+              backgroundColor = styleEqual(c('Low Volume Group', 'High Volume Group'), c('lightgrey', 'lightgreen'))) %>%
+    formatStyle(
+    'High Cost Group', ' ',
+    backgroundColor = styleEqual(c('Low Volume Group', 'High Volume Group'), c('lightyellow', 'lightpink'))) %>%
+    formatStyle(
+      ' ', fontWeight = 'bold'
+      )
+})
+```
+
